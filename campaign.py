@@ -46,98 +46,129 @@ EDITOR = os.environ.get('EDITOR', 'nvim')
 # Custom Parser - لقراءة الملف
 # ═══════════════════════════════════════
 
+def remove_comment(line):
+    """إزالة التعليقات من السطر (كل حاجة بعد #)"""
+    if '#' in line:
+        return line.split('#')[0]
+    return line
+
 def parse_campaigns_file():
     """قراءة ملف الحملات بدون YAML"""
     if not CAMPAIGNS_FILE.exists():
         return []
-    
+
     content = CAMPAIGNS_FILE.read_text()
     campaigns = []
-    
+
     # تقسيم حسب ---
     blocks = content.split('---\n')
-    
+
     for block in blocks:
         block = block.strip()
         if not block or '###TEMPLATE###' in block:
             continue
-        
+
         campaign = {}
         current_key = None
         current_list = []
-        
+
         for line in block.split('\n'):
+            # إزالة التعليقات أولاً
+            line = remove_comment(line)
             line_stripped = line.strip()
-            
+
             # تخطي الأسطر الفارغة
             if not line_stripped:
                 continue
-            
+
             # التحقق من السطر يحتوي على :
             if ':' in line and not line_stripped.startswith('-'):
                 # حفظ القائمة السابقة إذا كانت موجودة
                 if current_key and current_list:
                     campaign[current_key] = current_list
                     current_list = []
-                
+
                 # قراءة المفتاح والقيمة
                 key, value = line.split(':', 1)
                 key = key.strip()
                 value = value.strip()
-                
+
                 current_key = key
-                
+
                 # إذا كانت القيمة فارغة، نتوقع قائمة
                 if not value:
                     current_list = []
                 else:
                     campaign[key] = value
                     current_key = None
-            
-            # عنصر في قائمة (حفظ السطر مع المسافات للـ subtasks)
+
+            # عنصر في قائمة (حفظ السطر مع tabs)
             elif line_stripped.startswith('-') and current_key:
                 current_list.append(line.rstrip())
-        
+
         # حفظ القائمة الأخيرة
         if current_key and current_list:
             campaign[current_key] = current_list
-        
+
         # إضافة الحملة إذا كانت تحتوي على رقم
         if KEYS['number'] in campaign:
             campaigns.append(campaign)
-    
+
     return campaigns
 
 # ═══════════════════════════════════════
 # وظائف مساعدة - Helper Functions
 # ═══════════════════════════════════════
 
+def count_indentation_level(line):
+    """حساب مستوى الـ indentation (tabs أو spaces)
+    - كل tab = مستوى واحد
+    - كل 4 spaces = مستوى واحد (أو أقل)
+    """
+    indent = 0
+    i = 0
+    while i < len(line):
+        if line[i] == '\t':
+            indent += 1
+            i += 1
+        elif line[i] == ' ':
+            # عد الـ spaces المتتالية
+            spaces = 0
+            while i < len(line) and line[i] == ' ':
+                spaces += 1
+                i += 1
+            # كل 2-4 spaces = مستوى واحد
+            indent += max(1, spaces // 3)
+        else:
+            break
+    return indent
+
 def find_active_campaign():
     """البحث عن الحملة النشطة"""
     campaigns = parse_campaigns_file()
     if not campaigns:
         return None
-    
+
     today = datetime.now().date()
-    
+
     for campaign in campaigns:
         try:
             start_str = campaign.get(KEYS['start'], '')
             end_str = campaign.get(KEYS['end'], '')
-            
+
             if not start_str or not end_str:
                 continue
-            
+
             start = datetime.strptime(start_str, '%Y-%m-%d').date()
             end = datetime.strptime(end_str, '%Y-%m-%d').date()
-            
+
             # حساب نهاية الاستشفاء
             recovery_end_str = campaign.get(KEYS['recovery_end'], '').strip()
             if recovery_end_str:
                 recovery_end = datetime.strptime(recovery_end_str, '%Y-%m-%d').date()
             else:
                 recovery_end = end + timedelta(days=14)
-            
+
             # التحقق إذا كان اليوم ضمن نطاق الحملة
             if start <= today <= end:
                 return {
@@ -148,7 +179,7 @@ def find_active_campaign():
                 }
         except:
             continue
-    
+
     return None
 
 def calculate_week(start, today):
@@ -160,66 +191,70 @@ def calculate_week(start, today):
 def get_current_milestone(campaign_data):
     """الحصول على المهمة الحالية مع subtasks"""
     milestones = campaign_data.get(KEYS['milestones'], [])
-    
+
     for i, milestone in enumerate(milestones):
-        milestone_stripped = milestone.strip()
-        
+        # إزالة التعليقات
+        milestone_clean = remove_comment(milestone)
+        milestone_stripped = milestone_clean.strip()
+
         if not milestone_stripped or not milestone_stripped.startswith('- ['):
             continue
-        
-        # عد المسافات البادئة
-        leading_spaces = len(milestone) - len(milestone.lstrip())
-        
-        # main task = مسافات قليلة (3 أو أقل)
-        if leading_spaces <= 3:
+
+        # حساب مستوى الـ indentation
+        indent_level = count_indentation_level(milestone)
+
+        # main task = مستوى 1 (tab واحد أو 3-4 spaces)
+        if indent_level == 1:
             if '[ ]' in milestone_stripped:
                 # لقينا main task معلقة
                 text = milestone_stripped.split('[ ]', 1)[1].strip()
-                
+
                 # دور على subtask معلقة تحتها
                 for j in range(i + 1, len(milestones)):
                     sub_milestone = milestones[j]
-                    sub_stripped = sub_milestone.strip()
-                    sub_spaces = len(sub_milestone) - len(sub_milestone.lstrip())
-                    
-                    # لو لقينا main task تانية، وقف
-                    if sub_spaces <= 3 and sub_stripped.startswith('- ['):
+                    sub_clean = remove_comment(sub_milestone)
+                    sub_stripped = sub_clean.strip()
+                    sub_indent = count_indentation_level(sub_milestone)
+
+                    # لو لقينا main task تانية (مستوى 1)، وقف
+                    if sub_indent == 1 and sub_stripped.startswith('- ['):
                         break
-                    
-                    # لو لقينا subtask معلقة، ارجعها
-                    if sub_spaces > 3 and sub_stripped.startswith('- [') and '[ ]' in sub_stripped:
+
+                    # لو لقينا subtask معلقة (مستوى أكبر من 1)، ارجعها
+                    if sub_indent > 1 and sub_stripped.startswith('- [') and '[ ]' in sub_stripped:
                         sub_text = sub_stripped.split('[ ]', 1)[1].strip()
                         return i + 1, text, sub_text, len(milestones)
-                
+
                 # مفيش subtasks معلقة، ارجع الـ main task بس
                 return i + 1, text, None, len(milestones)
-    
+
     # مفيش حاجة معلقة خالص
     return None, None, None, len(milestones)
 
 def count_completed_milestones(campaign_data):
-    """عد المهام المنجزة (main tasks فقط)"""
+    """عد المهام المنجزة (main tasks فقط - مستوى 1)"""
     milestones = campaign_data.get(KEYS['milestones'], [])
     completed = 0
     total = 0
-    
+
     for milestone in milestones:
-        milestone_stripped = milestone.strip()
-        
+        # إزالة التعليقات
+        milestone_clean = remove_comment(milestone)
+        milestone_stripped = milestone_clean.strip()
+
         # تخطي الأسطر الفارغة
         if not milestone_stripped:
             continue
-        
-        # عد المسافات البادئة
-        leading_spaces = len(milestone) - len(milestone.lstrip())
-        
-        # main task = مسافات قليلة (3 أو أقل)
-        # subtask = مسافات كتيرة (أكتر من 3)
-        if leading_spaces <= 3 and milestone_stripped.startswith('- ['):
+
+        # حساب مستوى الـ indentation
+        indent_level = count_indentation_level(milestone)
+
+        # main task = مستوى 1 فقط
+        if indent_level == 1 and milestone_stripped.startswith('- ['):
             total += 1
             if '[x]' in milestone_stripped or '[X]' in milestone_stripped:
                 completed += 1
-    
+
     return completed, total
 
 # ═══════════════════════════════════════
@@ -250,17 +285,17 @@ def cmd_help():
 def cmd_info():
     """عرض معلومات الحملة الحالية"""
     campaign = find_active_campaign()
-    
+
     if not campaign:
         print("❌ لا توجد حملة نشطة")
         print("✏️  أنشئ واحدة: python3 campaign.py edit")
         return
-    
+
     data = campaign['data']
     name = data.get(KEYS['name'], 'غير محدد')
     description = data.get(KEYS['description'], '')
     start = campaign['start']
-    
+
     print()
     print(f"Name: {name}")
     print(f"Start date: {start.strftime('%d %B %Y')}")
@@ -271,15 +306,15 @@ def cmd_info():
 def cmd_current():
     """عرض المهمة الحالية والتقدم"""
     campaign = find_active_campaign()
-    
+
     if not campaign:
         print("❌ لا توجد حملة نشطة")
         return
-    
+
     data = campaign['data']
     completed, total = count_completed_milestones(data)
     milestone_num, parent_text, subtask_text, _ = get_current_milestone(data)
-    
+
     if parent_text:
         if subtask_text:
             # عندنا parent و subtask
@@ -303,19 +338,19 @@ def cmd_edit():
 {KEYS['end']}: {(datetime.now() + timedelta(days=42)).strftime('%Y-%m-%d')}
 {KEYS['recovery_end']}: 
 {KEYS['milestones']}:
-   - [ ] مهمة 1
-   - [ ] مهمة 2
-      - [ ] subtask 2.1
-      - [ ] subtask 2.2
-   - [ ] مهمة 3
+	- [ ] مهمة 1
+	- [ ] مهمة 2
+		- [ ] subtask 2.1
+		- [ ] subtask 2.2
+	- [ ] مهمة 3 # هذا تعليق - البرنامج يتجاهله
 {KEYS['status']}: 
 {KEYS['rate']}: 
 {KEYS['links']}:
-   - 
+	- 
 ---
 
 ---
-###TEMPLATE###
+###TEMPLATE (tasks hirarchy uses tabs) ###
 {KEYS['number']}: 
 {KEYS['name']}: 
 {KEYS['description']}: 
@@ -323,20 +358,20 @@ def cmd_edit():
 {KEYS['end']}:
 {KEYS['recovery_end']}:
 {KEYS['milestones']}:
-   - [x] مثال منجز
-      - [x] subtask منجز
-      - [ ] subtask معلق
-   - [-] مثال ملغي
-   - [ ] مثال معلق
+	- [x] مثال منجز
+		- [x] subtask منجز
+		- [ ] subtask معلق
+	- [-] مثال ملغي # تعليق
+	- [ ] مثال معلق
 {KEYS['status']}: 
 {KEYS['rate']}: 
 {KEYS['links']}:
-   -
+	-
 ---
 """
         CAMPAIGNS_FILE.write_text(template)
         print(f"✅ تم إنشاء ملف جديد: {CAMPAIGNS_FILE}")
-    
+
     # فتح الملف في المحرر
     subprocess.run([EDITOR, str(CAMPAIGNS_FILE)])
 
@@ -346,7 +381,7 @@ def cmd_wiki():
         print(f"❌ الملف غير موجود: {WIKI_FILE}")
         print(f"💡 عدّل المسار في الكود: WIKI_FILE")
         return
-    
+
     try:
         subprocess.Popen([WIKI_VIEWER, str(WIKI_FILE)], 
                         stdout=subprocess.DEVNULL, 
@@ -362,14 +397,14 @@ def cmd_motivate():
         print(f"❌ الملف غير موجود: {MOTIVATE_FILE}")
         print(f"💡 أنشئ ملف {MOTIVATE_FILE} وضع كل مقولة في سطر")
         return
-    
+
     lines = MOTIVATE_FILE.read_text().strip().split('\n')
     lines = [l.strip() for l in lines if l.strip()]
-    
+
     if not lines:
         print("❌ الملف فارغ!")
         return
-    
+
     quote = random.choice(lines)
     print()
     print(f"  💡 {quote}")
@@ -381,7 +416,7 @@ def cmd_yourself():
         print(f"❌ الملف غير موجود: {YOURSELF_FILE}")
         print(f"💡 أنشئ ملف {YOURSELF_FILE}")
         return
-    
+
     try:
         subprocess.run([YOURSELF_VIEWER, str(YOURSELF_FILE)])
     except FileNotFoundError:
@@ -396,9 +431,9 @@ def main():
     if len(sys.argv) < 2:
         cmd_help()
         sys.exit(1)
-    
+
     command = sys.argv[1].lower()
-    
+
     commands = {
         'help': cmd_help,
         'info': cmd_info,
@@ -408,7 +443,7 @@ def main():
         'motivate': cmd_motivate,
         'yourself': cmd_yourself,
     }
-    
+
     if command in commands:
         commands[command]()
     else:
