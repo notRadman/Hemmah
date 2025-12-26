@@ -6,7 +6,7 @@
 # إعدادات
 # ═══════════════════════════════════════
 
-CAMPAIGNS_FILE="$HOME/Documents/campaigno/campaigns.md"
+CAMPAIGNS_FILE="$HOME/Documents/Hemmah/campaigns.md"
 
 # مفاتيح اللغة
 KEY_NUMBER="number"

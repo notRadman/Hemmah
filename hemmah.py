@@ -33,7 +33,7 @@ KEYS = {
 
 SCRIPT_DIR = Path(__file__).parent
 
-CAMPAIGNS_FILE = Path.home() / "Documents/campaigno/campaigns.md"
+CAMPAIGNS_FILE = Path.home() / "Documents/Hemmah/campaigns.md"
 WIKI_FILE = SCRIPT_DIR / "wiki.pdf"
 WIKI_VIEWER = "zathura"
 MOTIVATE_FILE = SCRIPT_DIR / "quotes.md"
